@@ -1,0 +1,6 @@
+{
+  "_note": "key -> keywords (matched case-insensitively in recent turns) and the spoken name. Respell names the voice mispronounces.",
+  "billing":  {"keywords": ["billing", "invoice", "stripe"], "spoken": "Billing"},
+  "frontend": {"keywords": ["frontend", "react", "landing page"], "spoken": "Front end"},
+  "api":      {"keywords": ["api server", "backend", "endpoint"], "spoken": "The A.P.I."}
+}

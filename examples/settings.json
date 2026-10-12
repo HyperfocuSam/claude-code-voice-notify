@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "python3 /path/to/claude-code-voice-notify/notify.py" } ] }
+    ],
+    "Notification": [
+      { "matcher": "permission_prompt", "hooks": [ { "type": "command", "command": "python3 /path/to/claude-code-voice-notify/notify.py" } ] }
+    ]
+  }
+}

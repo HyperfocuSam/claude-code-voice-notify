@@ -1,0 +1,10 @@
+{
+  "provider": "say",
+  "voice": null,
+  "fallback_name": "Claude",
+  "done_template": "{name} is done.",
+  "needs_template": "{name} needs you.",
+  "jingle": "/System/Library/Sounds/Glass.aiff",
+  "settle_seconds": 4,
+  "scan_entries": 40
+}
