@@ -13,6 +13,10 @@ Config lives in $VOICE_NOTIFY_HOME (default ~/.config/claude-voice-notify):
   projects.json  project key -> keywords + spoken name
   clips/         pre-generated audio, built by generate_clips.py
 Mute: create $VOICE_NOTIFY_HOME/muted
+Hold (one voice at a time): while the file named by config "hold_file" is live (JSON {"pid", "at"};
+ignored when older than "hold_max_age" seconds or when that pid is gone), nothing is played. The event
+is POSTed to config "hold_event_url" instead (JSON: project, state, text), e.g. a voice app that is in a call.
+Dry run: VOICE_NOTIFY_DRY_RUN=1 prints what would play instead of playing it.
 """
 from __future__ import annotations
 
@@ -32,6 +36,9 @@ DEFAULTS = {
     "jingle": "/System/Library/Sounds/Glass.aiff",
     "settle_seconds": 4,
     "scan_entries": 40,
+    "hold_file": "",
+    "hold_max_age": 7200,
+    "hold_event_url": "",
 }
 FALLBACK_KEY = "_default"
 LOCK = Path(tempfile.gettempdir()) / "claude_voice_notify.lock"
@@ -127,6 +134,36 @@ def play(key: str, state: str, cfg: dict) -> None:
                 subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def hold_live(cfg: dict) -> bool:
+    """True while another voice (e.g. a live voice call) owns the speakers."""
+    f = Path(os.path.expanduser(cfg.get("hold_file") or ""))
+    if not cfg.get("hold_file") or not f.exists():
+        return False
+    try:
+        h = json.loads(f.read_text())
+        if time.time() - float(h.get("at", 0)) > float(cfg.get("hold_max_age", 7200)):
+            return False
+        os.kill(int(h["pid"]), 0)          # raises if the owner process is gone
+        return True
+    except (ValueError, KeyError, TypeError, OSError):
+        return False
+
+
+def post_event(cfg: dict, key: str, state: str) -> None:
+    url = cfg.get("hold_event_url")
+    if not url:
+        return
+    name = key.strip("_").capitalize() if key != FALLBACK_KEY else "A session"
+    body = {"project": name, "state": state, "text": f"{name}: {'needs you' if state == 'needs' else 'back to you'}",
+            "source": "claude-code-voice-notify"}
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=3).read()
+    except Exception:
+        pass
+
+
 def player(payload: dict) -> None:
     cfg = config()
     event = payload.get("hook_event_name", "")
@@ -142,6 +179,14 @@ def player(payload: dict) -> None:
         state = "needs" if asks else "done"
     else:
         state = "needs"
+    if hold_live(cfg):
+        post_event(cfg, key, state)   # another voice is talking: hand the event over silently
+        if os.environ.get("VOICE_NOTIFY_DRY_RUN"):
+            print(f"held: {key} {state} -> {cfg.get('hold_event_url')}")
+        return
+    if os.environ.get("VOICE_NOTIFY_DRY_RUN"):
+        print(f"would play: {key} {state} jingle={cfg.get('jingle')} clip={find_clip(key, state)}")
+        return
     play(key, state, cfg)
 
 
