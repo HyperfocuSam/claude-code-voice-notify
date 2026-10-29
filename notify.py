@@ -16,6 +16,10 @@ Mute: create $VOICE_NOTIFY_HOME/muted
 Hold (one voice at a time): while the file named by config "hold_file" is live (JSON {"pid", "at"};
 ignored when older than "hold_max_age" seconds or when that pid is gone), nothing is played. The event
 is POSTed to config "hold_event_url" instead (JSON: project, state, text), e.g. a voice app that is in a call.
+Control app (optional): config "control_app" names a menu-bar app that controls these alerts (mute etc.).
+If it is not running it is relaunched before anything plays. If it reports, through "control_state_file"
+(JSON {"pid", "at", "visible"}), that its icon is not on screen, nothing is played: a silent macOS banner
+shows the line instead, so you never hear an alert you have no visible way to stop.
 Dry run: VOICE_NOTIFY_DRY_RUN=1 prints what would play instead of playing it.
 """
 from __future__ import annotations
@@ -39,6 +43,8 @@ DEFAULTS = {
     "hold_file": "",
     "hold_max_age": 7200,
     "hold_event_url": "",
+    "control_app": "",
+    "control_state_file": "",
 }
 FALLBACK_KEY = "_default"
 LOCK = Path(tempfile.gettempdir()) / "claude_voice_notify.lock"
@@ -164,6 +170,37 @@ def post_event(cfg: dict, key: str, state: str) -> None:
         pass
 
 
+def control_visible(cfg: dict) -> bool:
+    """Make sure the control app runs; True unless it reports its icon is hidden."""
+    app = os.path.expanduser(cfg.get("control_app") or "")
+    if not app or sys.platform != "darwin":
+        return True
+    exe = Path(app).stem.replace(" ", "")
+    running = subprocess.run(["pgrep", "-x", exe], capture_output=True).returncode == 0 or \
+        subprocess.run(["pgrep", "-f", f"{app}/Contents/MacOS/"], capture_output=True).returncode == 0
+    if not running:
+        subprocess.run(["open", "-g", app], check=False)
+        time.sleep(3)   # let it start and report where its icon is
+    f = Path(os.path.expanduser(cfg.get("control_state_file") or ""))
+    if not cfg.get("control_state_file") or not f.exists():
+        return True
+    try:
+        st = json.loads(f.read_text())
+        if time.time() - float(st.get("at", 0)) > 30:
+            return True    # stale report: don't silence on old news
+        return bool(st.get("visible", True))
+    except (ValueError, OSError, TypeError):
+        return True
+
+
+def banner(key: str, state: str, cfg: dict) -> None:
+    name = key.strip("_").capitalize() if key != FALLBACK_KEY else "A session"
+    line = f"{name}: {'needs you' if state == 'needs' else 'done'}"
+    msg = "Alert icon hidden in the menu bar, so this one is silent."
+    subprocess.run(["osascript", "-e", f"display notification {json.dumps(msg)} with title {json.dumps(line)}"],
+                   check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def player(payload: dict) -> None:
     cfg = config()
     event = payload.get("hook_event_name", "")
@@ -183,6 +220,12 @@ def player(payload: dict) -> None:
         post_event(cfg, key, state)   # another voice is talking: hand the event over silently
         if os.environ.get("VOICE_NOTIFY_DRY_RUN"):
             print(f"held: {key} {state} -> {cfg.get('hold_event_url')}")
+        return
+    if not control_visible(cfg):
+        if os.environ.get("VOICE_NOTIFY_DRY_RUN"):
+            print(f"banner (control icon hidden): {key} {state}")
+            return
+        banner(key, state, cfg)
         return
     if os.environ.get("VOICE_NOTIFY_DRY_RUN"):
         print(f"would play: {key} {state} jingle={cfg.get('jingle')} clip={find_clip(key, state)}")
